@@ -1,0 +1,117 @@
+# Vector Log Broker Configuration
+# Deploy to LXC 200 (10.10.10.100)
+# Purpose: Centralized log collection and routing to multiple destinations
+
+sources:
+  # TCP Syslog input
+  syslog_tcp:
+    type: syslog
+    address: "0.0.0.0:514"
+    mode: tcp
+
+  # UDP Syslog input
+  syslog_udp:
+    type: syslog
+    address: "0.0.0.0:514"
+    mode: udp
+
+  # JSON logs from applications
+  app_logs:
+    type: http
+    address: "0.0.0.0:8080"
+    encoding: json
+
+transforms:
+  # Parse and enrich logs
+  parse_logs:
+    type: remap
+    inputs: ["syslog_tcp", "syslog_udp", "app_logs"]
+    source: |
+      # Add timestamp
+      .timestamp = now()
+
+      # Mark as processed by broker
+      .broker_processed = true
+
+      # Preserve source host
+      .source_host = .host
+
+      # Extract tenant ID if present (format: tenant-{uuid}-servicename)
+      if exists(.hostname) {
+        parts = split(.hostname, "-")
+        if length(parts) > 2 {
+          .tenant_id = parts[1]
+        }
+      }
+
+      # Determine log level
+      if !exists(.severity) {
+        .severity = "info"
+      }
+
+  # Route by log type
+  route_logs:
+    type: route
+    inputs: ["parse_logs"]
+    route:
+      # Security logs go to Wazuh
+      security: |
+        .severity == "alert" || .severity == "critical" || contains(.message, "security")
+
+      # Application logs
+      application: |
+        exists(.tenant_id)
+
+      # System logs
+      system: |
+        !exists(.tenant_id)
+
+sinks:
+  # Archive all logs to Synology NAS
+  synology_archive:
+    type: socket
+    inputs: ["parse_logs"]
+    mode: tcp
+    address: "192.168.0.25:514"
+    encoding:
+      codec: syslog
+
+  # Send to Elasticsearch for searching/analysis
+  elasticsearch:
+    type: elasticsearch
+    inputs: ["parse_logs"]
+    endpoints: ["http://10.200.200.123:9200"]
+    bulk:
+      index: "aiqso-logs-%Y-%m-%d"
+    api_version: v8
+    compression: gzip
+
+  # Security logs to Wazuh
+  wazuh_security:
+    type: socket
+    inputs: ["route_logs.security"]
+    mode: tcp
+    address: "10.200.200.178:1514"
+    encoding:
+      codec: syslog
+
+  # Application logs to Loki (Grafana)
+  loki:
+    type: loki
+    inputs: ["route_logs.application"]
+    endpoint: "http://192.168.0.165:3100"
+    encoding:
+      codec: json
+    labels:
+      source: "aiqso-platform"
+      hostname: "{{ source_host }}"
+      tenant: "{{ tenant_id }}"
+
+  # Console output for debugging (disable in production)
+  console_debug:
+    type: console
+    inputs: ["parse_logs"]
+    encoding:
+      codec: json
+    # Uncomment to enable
+    # enabled: false

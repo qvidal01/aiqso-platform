@@ -1,0 +1,229 @@
+{
+  "name": "06 - Usage Tracking",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 * * * *"
+            }
+          ]
+        }
+      },
+      "name": "Schedule: Hourly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT DISTINCT t.id, t.subdomain\nFROM tenants t\nJOIN tenant_services ts ON ts.tenant_id = t.id\nWHERE t.status = 'active'\nAND ts.status = 'active';",
+        "options": {}
+      },
+      "name": "Get Active Tenants",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [470, 300],
+      "credentials": {
+        "postgres": {
+          "name": "AIQSO Master DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT ts.id, ts.container_id, ts.database_name, s.service_key\nFROM tenant_services ts\nJOIN services s ON ts.service_id = s.id\nWHERE ts.tenant_id = '{{$json[\"id\"]}}'\nAND ts.status = 'active';",
+        "options": {}
+      },
+      "name": "Get Tenant Services",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "command": "pct exec {{$json[\"container_id\"]}} -- df -BG / | tail -1 | awk '{print $3}' | sed 's/G//'",
+        "options": {}
+      },
+      "name": "Get Container Storage",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [910, 200]
+    },
+    {
+      "parameters": {
+        "command": "psql -h $POSTGRES_HOST -U $POSTGRES_USER -d {{$node[\"Get Tenant Services\"].json[\"database_name\"]}} -t -c \"SELECT pg_database_size('{{$node[\"Get Tenant Services\"].json[\"database_name\"]}}') / (1024*1024*1024.0);\" 2>/dev/null || echo 0",
+        "options": {}
+      },
+      "name": "Get Database Size",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) as api_calls\nFROM audit_log\nWHERE tenant_id = '{{$node[\"Get Active Tenants\"].json[\"id\"]}}'\nAND created_at >= NOW() - INTERVAL '1 hour';",
+        "options": {}
+      },
+      "name": "Count API Calls",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [910, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO usage_metrics (tenant_id, service_id, metric_type, metric_value)\nSELECT '{{$node[\"Get Active Tenants\"].json[\"id\"]}}',\n       s.id,\n       'storage_gb',\n       {{$node[\"Get Container Storage\"].json[\"stdout\"]}}::decimal\nFROM services s WHERE s.service_key = '{{$node[\"Get Tenant Services\"].json[\"service_key\"]}}';",
+        "options": {}
+      },
+      "name": "Log Storage Metric",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1130, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO usage_metrics (tenant_id, service_id, metric_type, metric_value)\nSELECT '{{$node[\"Get Active Tenants\"].json[\"id\"]}}',\n       s.id,\n       'database_gb',\n       {{$node[\"Get Database Size\"].json[\"stdout\"]}}::decimal\nFROM services s WHERE s.service_key = '{{$node[\"Get Tenant Services\"].json[\"service_key\"]}}';",
+        "options": {}
+      },
+      "name": "Log Database Metric",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO usage_metrics (tenant_id, service_id, metric_type, metric_value)\nSELECT '{{$node[\"Get Active Tenants\"].json[\"id\"]}}',\n       NULL,\n       'api_calls',\n       {{$node[\"Count API Calls\"].json[\"api_calls\"]}}::decimal;",
+        "options": {}
+      },
+      "name": "Log API Calls",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1130, 400]
+    },
+    {
+      "parameters": {
+        "operation": "aggregateItems",
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "name": "Aggregate Metrics",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "dateTime": [
+            {
+              "value1": "={{$now.day()}}",
+              "operation": "equals",
+              "value2": "1"
+            }
+          ]
+        }
+      },
+      "name": "First of Month?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH monthly_usage AS (\n  SELECT \n    t.id,\n    t.subdomain,\n    t.contact_email,\n    SUM(CASE WHEN um.metric_type = 'storage_gb' THEN um.metric_value ELSE 0 END) as total_storage,\n    SUM(CASE WHEN um.metric_type = 'api_calls' THEN um.metric_value ELSE 0 END) as total_api_calls,\n    SUM(CASE WHEN um.metric_type = 'ai_requests' THEN um.metric_value ELSE 0 END) as total_ai_requests\n  FROM tenants t\n  LEFT JOIN usage_metrics um ON um.tenant_id = t.id\n  WHERE um.recorded_at >= DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month')\n    AND um.recorded_at < DATE_TRUNC('month', CURRENT_DATE)\n  GROUP BY t.id, t.subdomain, t.contact_email\n)\nSELECT * FROM monthly_usage WHERE id = '{{$node[\"Get Active Tenants\"].json[\"id\"]}}';",
+        "options": {}
+      },
+      "name": "Calculate Monthly Usage",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1790, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://10.10.10.104:9000/api/tx",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "subscriber_email",
+              "value": "={{$json[\"contact_email\"]}}"
+            },
+            {
+              "name": "template_id",
+              "value": "5"
+            },
+            {
+              "name": "data",
+              "value": "={\"subdomain\": \"{{$json[\"subdomain\"]}}\", \"storage\": {{$json[\"total_storage\"]}}, \"api_calls\": {{$json[\"total_api_calls\"]}}, \"ai_requests\": {{$json[\"total_ai_requests\"]}}, \"month\": \"{{$now.subtract(1, 'month').format('MMMM YYYY')}}\"}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Send Usage Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [2010, 200]
+    }
+  ],
+  "connections": {
+    "Schedule: Hourly": {
+      "main": [[{"node": "Get Active Tenants", "type": "main", "index": 0}]]
+    },
+    "Get Active Tenants": {
+      "main": [[{"node": "Get Tenant Services", "type": "main", "index": 0}]]
+    },
+    "Get Tenant Services": {
+      "main": [[
+        {"node": "Get Container Storage", "type": "main", "index": 0},
+        {"node": "Get Database Size", "type": "main", "index": 0},
+        {"node": "Count API Calls", "type": "main", "index": 0}
+      ]]
+    },
+    "Get Container Storage": {
+      "main": [[{"node": "Log Storage Metric", "type": "main", "index": 0}]]
+    },
+    "Get Database Size": {
+      "main": [[{"node": "Log Database Metric", "type": "main", "index": 0}]]
+    },
+    "Count API Calls": {
+      "main": [[{"node": "Log API Calls", "type": "main", "index": 0}]]
+    },
+    "Log Storage Metric": {
+      "main": [[{"node": "Aggregate Metrics", "type": "main", "index": 0}]]
+    },
+    "Log Database Metric": {
+      "main": [[{"node": "Aggregate Metrics", "type": "main", "index": 0}]]
+    },
+    "Log API Calls": {
+      "main": [[{"node": "Aggregate Metrics", "type": "main", "index": 0}]]
+    },
+    "Aggregate Metrics": {
+      "main": [[{"node": "First of Month?", "type": "main", "index": 0}]]
+    },
+    "First of Month?": {
+      "main": [[{"node": "Calculate Monthly Usage", "type": "main", "index": 0}]]
+    },
+    "Calculate Monthly Usage": {
+      "main": [[{"node": "Send Usage Report", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-09-29T00:00:00.000Z",
+  "versionId": "1"
+}

@@ -1,0 +1,186 @@
+{
+  "name": "03 - Backup Orchestration",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Schedule: Daily 2 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT DISTINCT t.id, t.subdomain, t.company_name\nFROM tenants t\nJOIN tenant_services ts ON ts.tenant_id = t.id\nWHERE t.status = 'active'\nAND ts.status = 'active';",
+        "options": {}
+      },
+      "name": "Get Active Tenants",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [470, 300],
+      "credentials": {
+        "postgres": {
+          "name": "AIQSO Master DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "cd /home/cyber/aiqso-platform/scripts && ./backup-tenant.sh '{{$json[\"id\"]}}'",
+        "options": {}
+      },
+      "name": "Execute Backup Script",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json[\"code\"]}}",
+              "operation": "equal",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "name": "Backup Successful?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (tenant_id, action, details)\nVALUES ('{{$node[\"Get Active Tenants\"].json[\"id\"]}}', 'backup_completed', '{\"status\": \"success\", \"subdomain\": \"{{$node[\"Get Active Tenants\"].json[\"subdomain\"]}}\"}');",
+        "options": {}
+      },
+      "name": "Log Success",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1130, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (tenant_id, action, details)\nVALUES ('{{$node[\"Get Active Tenants\"].json[\"id\"]}}', 'backup_failed', '{\"status\": \"failed\", \"subdomain\": \"{{$node[\"Get Active Tenants\"].json[\"subdomain\"]}}\", \"error\": \"{{$node[\"Execute Backup Script\"].json[\"stderr\"]}}\"}');",
+        "options": {}
+      },
+      "name": "Log Failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1130, 400]
+    },
+    {
+      "parameters": {
+        "operation": "aggregateItems",
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) as total_backups,\n       COUNT(CASE WHEN status = 'completed' THEN 1 END) as successful,\n       COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed\nFROM backups\nWHERE created_at >= NOW() - INTERVAL '24 hours';",
+        "options": {}
+      },
+      "name": "Get Backup Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://10.10.10.104:9000/api/tx",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "subscriber_email",
+              "value": "={{$env.ADMIN_EMAIL}}"
+            },
+            {
+              "name": "template_id",
+              "value": "3"
+            },
+            {
+              "name": "data",
+              "value": "={\"total\": {{$json[\"total_backups\"]}}, \"successful\": {{$json[\"successful\"]}}, \"failed\": {{$json[\"failed\"]}}, \"date\": \"{{$now.format('YYYY-MM-DD')}}\"}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Send Backup Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1790, 300]
+    },
+    {
+      "parameters": {
+        "command": "find /mnt/pve/syno-nfs/backups/aiqso -name '*.tar.gz' -mtime +30 -delete && find /mnt/pve/syno-nfs/backups/aiqso -name '*.sql.gz' -mtime +30 -delete",
+        "options": {}
+      },
+      "name": "Clean Old Backups",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [2010, 300]
+    }
+  ],
+  "connections": {
+    "Schedule: Daily 2 AM": {
+      "main": [[{"node": "Get Active Tenants", "type": "main", "index": 0}]]
+    },
+    "Get Active Tenants": {
+      "main": [[{"node": "Execute Backup Script", "type": "main", "index": 0}]]
+    },
+    "Execute Backup Script": {
+      "main": [[{"node": "Backup Successful?", "type": "main", "index": 0}]]
+    },
+    "Backup Successful?": {
+      "main": [
+        [{"node": "Log Success", "type": "main", "index": 0}],
+        [{"node": "Log Failure", "type": "main", "index": 0}]
+      ]
+    },
+    "Log Success": {
+      "main": [[{"node": "Aggregate Results", "type": "main", "index": 0}]]
+    },
+    "Log Failure": {
+      "main": [[{"node": "Aggregate Results", "type": "main", "index": 0}]]
+    },
+    "Aggregate Results": {
+      "main": [[{"node": "Get Backup Stats", "type": "main", "index": 0}]]
+    },
+    "Get Backup Stats": {
+      "main": [[{"node": "Send Backup Report", "type": "main", "index": 0}]]
+    },
+    "Send Backup Report": {
+      "main": [[{"node": "Clean Old Backups", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-09-29T00:00:00.000Z",
+  "versionId": "1"
+}

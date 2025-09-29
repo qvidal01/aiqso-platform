@@ -1,0 +1,193 @@
+{
+  "name": "01 - Customer Provisioning",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "stripe-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Stripe Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "aiqso-stripe-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json[\"type\"]}}",
+              "operation": "equals",
+              "value2": "payment_intent.succeeded"
+            }
+          ]
+        }
+      },
+      "name": "Payment Succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO tenants (subdomain, company_name, contact_email, stripe_customer_id, status, trial_ends_at)\nVALUES ('{{$json[\"data\"][\"object\"][\"metadata\"][\"subdomain\"]}}', '{{$json[\"data\"][\"object\"][\"metadata\"][\"company_name\"]}}', '{{$json[\"data\"][\"object\"][\"receipt_email\"]}}', '{{$json[\"data\"][\"object\"][\"customer\"]}}', 'active', NOW() + INTERVAL '14 days')\nRETURNING id, subdomain;",
+        "options": {}
+      },
+      "name": "Create Tenant Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [690, 300],
+      "credentials": {
+        "postgres": {
+          "name": "AIQSO Master DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "cd /home/cyber/aiqso-platform/scripts && ./provision-tenant.sh '{{$json[\"id\"]}}' '{{$json[\"subdomain\"]}}' '{{$node[\"Stripe Webhook\"].json[\"data\"][\"object\"][\"metadata\"][\"company_name\"]}}' '{{$node[\"Stripe Webhook\"].json[\"data\"][\"object\"][\"receipt_email\"]}}'",
+        "options": {}
+      },
+      "name": "Execute Provisioning Script",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://10.10.10.127:81/api",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "domain_names",
+              "value": "=['{{$node[\"Create Tenant Record\"].json[\"subdomain\"]}}.aiqso.io']"
+            },
+            {
+              "name": "forward_host",
+              "value": "={{$node[\"Execute Provisioning Script\"].json[\"stdout\"] | match('IP Address:\\s+(\\d+\\.\\d+\\.\\d+\\.\\d+)')[1]}}"
+            },
+            {
+              "name": "forward_port",
+              "value": "80"
+            },
+            {
+              "name": "ssl_forced",
+              "value": "true"
+            },
+            {
+              "name": "certificate_id",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Create NginxPM Route",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO subscriptions (tenant_id, stripe_subscription_id, status, current_period_start, current_period_end)\nVALUES ('{{$node[\"Create Tenant Record\"].json[\"id\"]}}', '{{$node[\"Stripe Webhook\"].json[\"data\"][\"object\"][\"id\"]}}', 'active', NOW(), NOW() + INTERVAL '1 month');",
+        "options": {}
+      },
+      "name": "Create Subscription Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (tenant_id, action, details, ip_address)\nVALUES ('{{$node[\"Create Tenant Record\"].json[\"id\"]}}', 'tenant_provisioned', '{\"subdomain\": \"{{$node[\"Create Tenant Record\"].json[\"subdomain\"]}}\"}', '{{$node[\"Stripe Webhook\"].json[\"request\"][\"headers\"][\"x-forwarded-for\"]}}'::inet);",
+        "options": {}
+      },
+      "name": "Log Audit Entry",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://10.10.10.104:9000/api/tx",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "subscriber_email",
+              "value": "={{$node[\"Stripe Webhook\"].json[\"data\"][\"object\"][\"receipt_email\"]}}"
+            },
+            {
+              "name": "template_id",
+              "value": "1"
+            },
+            {
+              "name": "data",
+              "value": "={\"subdomain\": \"{{$node[\"Create Tenant Record\"].json[\"subdomain\"]}}\", \"company_name\": \"{{$node[\"Stripe Webhook\"].json[\"data\"][\"object\"][\"metadata\"][\"company_name\"]}}\"}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Send Welcome Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1790, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"tenant_id\": \"{{$node[\"Create Tenant Record\"].json[\"id\"]}}\", \"subdomain\": \"{{$node[\"Create Tenant Record\"].json[\"subdomain\"]}}\", \"url\": \"https://{{$node[\"Create Tenant Record\"].json[\"subdomain\"]}}.aiqso.io\"}",
+        "options": {}
+      },
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2010, 300]
+    }
+  ],
+  "connections": {
+    "Stripe Webhook": {
+      "main": [[{"node": "Payment Succeeded?", "type": "main", "index": 0}]]
+    },
+    "Payment Succeeded?": {
+      "main": [[{"node": "Create Tenant Record", "type": "main", "index": 0}]]
+    },
+    "Create Tenant Record": {
+      "main": [[{"node": "Execute Provisioning Script", "type": "main", "index": 0}]]
+    },
+    "Execute Provisioning Script": {
+      "main": [[{"node": "Create NginxPM Route", "type": "main", "index": 0}]]
+    },
+    "Create NginxPM Route": {
+      "main": [[{"node": "Create Subscription Record", "type": "main", "index": 0}]]
+    },
+    "Create Subscription Record": {
+      "main": [[{"node": "Log Audit Entry", "type": "main", "index": 0}]]
+    },
+    "Log Audit Entry": {
+      "main": [[{"node": "Send Welcome Email", "type": "main", "index": 0}]]
+    },
+    "Send Welcome Email": {
+      "main": [[{"node": "Webhook Response", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-09-29T00:00:00.000Z",
+  "versionId": "1"
+}

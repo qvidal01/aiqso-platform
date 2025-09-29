@@ -1,0 +1,187 @@
+{
+  "name": "05 - AI Content Generation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-generate",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "aiqso-ai-generate"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.id, t.subdomain, s.status\nFROM tenants t\nJOIN subscriptions s ON s.tenant_id = t.id\nJOIN tenant_services ts ON ts.tenant_id = t.id\nJOIN services sv ON ts.service_id = sv.id\nWHERE t.id = '{{$json[\"body\"][\"tenant_id\"]}}'\nAND s.status = 'active'\nAND sv.service_key IN ('content', 'social')\nLIMIT 1;",
+        "options": {}
+      },
+      "name": "Validate AI Access",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [470, 300],
+      "credentials": {
+        "postgres": {
+          "name": "AIQSO Master DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json[\"id\"] ? true : false}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Has AI Features?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const contentType = $input.item.json.body.content_type;\nconst topic = $input.item.json.body.topic;\nconst parameters = $input.item.json.body.parameters || {};\n\nlet prompt = '';\n\nswitch(contentType) {\n  case 'blog_post':\n    prompt = `Write a comprehensive, SEO-optimized blog post about \"${topic}\". \n\nRequirements:\n- Length: ${parameters.length || 1000} words minimum\n- Tone: ${parameters.tone || 'professional and informative'}\n- Include: Introduction, main sections with headers, conclusion\n- Format: Markdown with H2 and H3 headers\n- Add relevant examples and actionable insights\n- Target audience: ${parameters.audience || 'general business audience'}\n\nTopic: ${topic}`;\n    break;\n    \n  case 'social_post':\n    prompt = `Create an engaging social media post about \"${topic}\".\n\nRequirements:\n- Platform: ${parameters.platform || 'LinkedIn'}\n- Length: ${parameters.platform === 'twitter' ? '280 characters' : '200-300 words'}\n- Tone: ${parameters.tone || 'engaging and conversational'}\n- Include relevant hashtags\n- Call to action at the end\n\nTopic: ${topic}`;\n    break;\n    \n  case 'email_campaign':\n    prompt = `Write a marketing email for an email campaign about \"${topic}\".\n\nRequirements:\n- Subject line (under 50 characters)\n- Preview text (under 100 characters)\n- Email body (200-400 words)\n- Tone: ${parameters.tone || 'professional yet friendly'}\n- Include clear call-to-action button text\n- Target: ${parameters.audience || 'existing customers'}\n\nTopic: ${topic}`;\n    break;\n    \n  default:\n    prompt = `Create content about: ${topic}`;\n}\n\nreturn [{ json: { prompt: prompt, topic: topic, content_type: contentType } }];"
+        },
+        "name": "Build AI Prompt",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [910, 300]
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://10.10.10.11:11434/api/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "={{$env.OLLAMA_MODEL || 'llama3:latest'}}"
+            },
+            {
+              "name": "prompt",
+              "value": "={{$json[\"prompt\"]}}"
+            },
+            {
+              "name": "stream",
+              "value": false
+            },
+            {
+              "name": "options",
+              "value": "={\"temperature\": 0.7, \"top_p\": 0.9}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "name": "Generate with Ollama",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.item.json.response;\nconst contentType = $node[\"Build AI Prompt\"].json.content_type;\n\n// Parse and format the response\nlet formattedContent = response;\n\n// Apply formatting based on content type\nif (contentType === 'email_campaign') {\n  // Extract subject line, preview text, and body\n  const lines = response.split('\\n');\n  const subjectMatch = response.match(/Subject(?:\\s*[Ll]ine)?\\s*:?\\s*(.+?)(?:\\n|$)/i);\n  const previewMatch = response.match(/Preview(?:\\s*[Tt]ext)?\\s*:?\\s*(.+?)(?:\\n|$)/i);\n  \n  formattedContent = {\n    subject: subjectMatch ? subjectMatch[1].trim() : lines[0],\n    preview: previewMatch ? previewMatch[1].trim() : '',\n    body: response\n  };\n}\n\nreturn [{ json: { \n  content: formattedContent,\n  content_type: contentType,\n  topic: $node[\"Build AI Prompt\"].json.topic,\n  generated_at: new Date().toISOString(),\n  model: $env.OLLAMA_MODEL || 'llama3:latest'\n} }];"
+        },
+        "name": "Parse & Format Response",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [1350, 300]
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO usage_metrics (tenant_id, service_id, metric_type, metric_value)\nSELECT '{{$node[\"Validate AI Access\"].json[\"id\"]}}',\n       id,\n       'ai_requests',\n       1\nFROM services WHERE service_key = 'content';",
+        "options": {}
+      },
+      "name": "Log AI Usage",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (tenant_id, action, details)\nVALUES ('{{$node[\"Validate AI Access\"].json[\"id\"]}}', 'ai_content_generated', jsonb_build_object(\n  'content_type', '{{$node[\"Parse & Format Response\"].json[\"content_type\"]}}',\n  'topic', '{{$node[\"Parse & Format Response\"].json[\"topic\"]}}',\n  'model', '{{$node[\"Parse & Format Response\"].json[\"model\"]}}'\n));",
+        "options": {}
+      },
+      "name": "Log Audit Entry",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1790, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{JSON.stringify($node[\"Parse & Format Response\"].json)}}",
+        "options": {}
+      },
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2010, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"success\": false, \"error\": \"AI features not available for this subscription\"}",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [690, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Validate AI Access", "type": "main", "index": 0}]]
+    },
+    "Validate AI Access": {
+      "main": [[{"node": "Has AI Features?", "type": "main", "index": 0}]]
+    },
+    "Has AI Features?": {
+      "main": [
+        [{"node": "Build AI Prompt", "type": "main", "index": 0}],
+        [{"node": "Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Build AI Prompt": {
+      "main": [[{"node": "Generate with Ollama", "type": "main", "index": 0}]]
+    },
+    "Generate with Ollama": {
+      "main": [[{"node": "Parse & Format Response", "type": "main", "index": 0}]]
+    },
+    "Parse & Format Response": {
+      "main": [[{"node": "Log AI Usage", "type": "main", "index": 0}]]
+    },
+    "Log AI Usage": {
+      "main": [[{"node": "Log Audit Entry", "type": "main", "index": 0}]]
+    },
+    "Log Audit Entry": {
+      "main": [[{"node": "Success Response", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-09-29T00:00:00.000Z",
+  "versionId": "1"
+}

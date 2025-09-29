@@ -1,0 +1,227 @@
+{
+  "name": "04 - Health Monitoring",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 * * * *"
+            }
+          ]
+        }
+      },
+      "name": "Schedule: Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT ts.id, t.subdomain, s.service_key, ts.container_id, ts.ip_address, ts.database_name\nFROM tenant_services ts\nJOIN tenants t ON ts.tenant_id = t.id\nJOIN services s ON ts.service_id = s.id\nWHERE ts.status = 'active'\nAND t.status = 'active';",
+        "options": {}
+      },
+      "name": "Get Active Services",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [470, 300],
+      "credentials": {
+        "postgres": {
+          "name": "AIQSO Master DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "pct status {{$json[\"container_id\"]}}",
+        "options": {}
+      },
+      "name": "Check Container Status",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json[\"stdout\"]}}",
+              "operation": "contains",
+              "value2": "running"
+            }
+          ]
+        }
+      },
+      "name": "Container Running?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://={{$node[\"Get Active Services\"].json[\"ip_address\"]}}",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "name": "HTTP Health Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1130, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json[\"statusCode\"]}}",
+              "operation": "smallerEqual",
+              "value2": 399
+            },
+            {
+              "value1": "={{$json[\"statusCode\"]}}",
+              "operation": "largerEqual",
+              "value2": 200
+            }
+          ]
+        }
+      },
+      "name": "HTTP Healthy?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1350, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tenant_services\nSET last_health_check = NOW(), status = 'active'\nWHERE id = '{{$node[\"Get Active Services\"].json[\"id\"]}}';",
+        "options": {}
+      },
+      "name": "Update Health Check - Healthy",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1570, 100]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tenant_services\nSET last_health_check = NOW(), status = 'stopped'\nWHERE id = '{{$node[\"Get Active Services\"].json[\"id\"]}}';",
+        "options": {}
+      },
+      "name": "Update Status - Stopped",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1130, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE tenant_services\nSET last_health_check = NOW(), status = 'degraded'\nWHERE id = '{{$node[\"Get Active Services\"].json[\"id\"]}}';",
+        "options": {}
+      },
+      "name": "Update Status - Degraded",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "command": "pct restart {{$node[\"Get Active Services\"].json[\"container_id\"]}}",
+        "options": {}
+      },
+      "name": "Attempt Auto-Restart",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1350, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://10.10.10.104:9000/api/tx",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "subscriber_email",
+              "value": "={{$env.ADMIN_EMAIL}}"
+            },
+            {
+              "name": "template_id",
+              "value": "4"
+            },
+            {
+              "name": "data",
+              "value": "={\"subdomain\": \"{{$node[\"Get Active Services\"].json[\"subdomain\"]}}\", \"service\": \"{{$node[\"Get Active Services\"].json[\"service_key\"]}}\", \"container_id\": {{$node[\"Get Active Services\"].json[\"container_id\"]}}, \"status\": \"unhealthy\"}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1570, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (tenant_id, action, details)\nSELECT tenant_id, 'service_unhealthy', jsonb_build_object(\n  'service_key', '{{$node[\"Get Active Services\"].json[\"service_key\"]}}',\n  'container_id', {{$node[\"Get Active Services\"].json[\"container_id\"]}},\n  'auto_restart_attempted', true\n)\nFROM tenant_services WHERE id = '{{$node[\"Get Active Services\"].json[\"id\"]}}';",
+        "options": {}
+      },
+      "name": "Log Incident",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1790, 400]
+    }
+  ],
+  "connections": {
+    "Schedule: Every 5 Minutes": {
+      "main": [[{"node": "Get Active Services", "type": "main", "index": 0}]]
+    },
+    "Get Active Services": {
+      "main": [[{"node": "Check Container Status", "type": "main", "index": 0}]]
+    },
+    "Check Container Status": {
+      "main": [[{"node": "Container Running?", "type": "main", "index": 0}]]
+    },
+    "Container Running?": {
+      "main": [
+        [{"node": "HTTP Health Check", "type": "main", "index": 0}],
+        [{"node": "Update Status - Stopped", "type": "main", "index": 0}]
+      ]
+    },
+    "HTTP Health Check": {
+      "main": [[{"node": "HTTP Healthy?", "type": "main", "index": 0}]]
+    },
+    "HTTP Healthy?": {
+      "main": [
+        [{"node": "Update Health Check - Healthy", "type": "main", "index": 0}],
+        [{"node": "Update Status - Degraded", "type": "main", "index": 0}]
+      ]
+    },
+    "Update Status - Stopped": {
+      "main": [[{"node": "Attempt Auto-Restart", "type": "main", "index": 0}]]
+    },
+    "Update Status - Degraded": {
+      "main": [[{"node": "Send Alert Email", "type": "main", "index": 0}]]
+    },
+    "Attempt Auto-Restart": {
+      "main": [[{"node": "Log Incident", "type": "main", "index": 0}]]
+    },
+    "Send Alert Email": {
+      "main": [[{"node": "Log Incident", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-09-29T00:00:00.000Z",
+  "versionId": "1"
+}
