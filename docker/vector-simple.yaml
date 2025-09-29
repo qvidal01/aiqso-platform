@@ -1,0 +1,52 @@
+# Simplified Vector Configuration for AIQSO Platform
+# This is a minimal working config - can be enhanced later
+
+sources:
+  # Receive syslog over TCP
+  syslog_tcp:
+    type: syslog
+    address: "0.0.0.0:514"
+    mode: tcp
+
+  # Receive JSON logs over HTTP
+  http_logs:
+    type: http_server
+    address: "0.0.0.0:8080"
+    encoding: json
+
+transforms:
+  # Simple enrichment
+  enrich:
+    type: remap
+    inputs: ["syslog_tcp", "http_logs"]
+    source: |
+      .timestamp = now()
+      .source_type = "aiqso-platform"
+
+sinks:
+  # Output to console for testing
+  console:
+    type: console
+    inputs: ["enrich"]
+    encoding:
+      codec: json
+
+  # Send to Elasticsearch
+  elasticsearch:
+    type: elasticsearch
+    inputs: ["enrich"]
+    endpoints: ["http://10.200.200.123:9200"]
+    bulk:
+      index: "aiqso-logs-%Y-%m-%d"
+    api_version: v8
+    compression: gzip
+
+  # Send to Grafana Loki
+  loki:
+    type: loki
+    inputs: ["enrich"]
+    endpoint: "http://192.168.0.165:3100"
+    encoding:
+      codec: json
+    labels:
+      source: "aiqso"

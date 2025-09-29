@@ -74,7 +74,7 @@ sinks:
     mode: tcp
     address: "192.168.0.25:514"
     encoding:
-      codec: syslog
+      codec: json
 
   # Send to Elasticsearch for searching/analysis
   elasticsearch:
@@ -93,7 +93,7 @@ sinks:
     mode: tcp
     address: "10.200.200.178:1514"
     encoding:
-      codec: syslog
+      codec: json
 
   # Application logs to Loki (Grafana)
   loki:
