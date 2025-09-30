@@ -1,0 +1,166 @@
+{
+  "name": "02 - Service Deployment",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "deploy-service",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "aiqso-deploy-service"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT t.id as tenant_id, t.subdomain, t.company_name, s.status\nFROM tenants t\nJOIN subscriptions s ON s.tenant_id = t.id\nWHERE t.id = '{{$json.body.tenant_id}}'\nAND s.status = 'active'\nLIMIT 1;",
+        "options": {}
+      },
+      "name": "Validate Tenant Subscription",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [470, 300],
+      "credentials": {
+        "postgres": {
+          "name": "AIQSO Master DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.tenant_id ? true : false}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Has Active Subscription?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id, service_key, service_name, config_template\nFROM services\nWHERE service_key = '{{$node['Webhook Trigger'].json.body.service_key}}'\nLIMIT 1;",
+        "options": {}
+      },
+      "name": "Get Service Details",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [910, 300],
+      "credentials": {
+        "postgres": {
+          "name": "AIQSO Master DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=ssh -i /mnt/c/Users/cyber/.ssh/id_rsa root@192.168.0.165 'cd /home/cyber/aiqso-platform/scripts && ./deploy-service.sh {{$node['Validate Tenant Subscription'].json.tenant_id}} {{$node['Get Service Details'].json.service_key}}'",
+        "options": {}
+      },
+      "name": "Deploy Service Container",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=UPDATE tenant_services\nSET status = 'active', provisioned_at = NOW()\nWHERE tenant_id = '{{$node['Validate Tenant Subscription'].json.tenant_id}}'\nAND service_id = (SELECT id FROM services WHERE service_key = '{{$node['Get Service Details'].json.service_key}}');",
+        "options": {}
+      },
+      "name": "Update Service Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1350, 300],
+      "credentials": {
+        "postgres": {
+          "name": "AIQSO Master DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO audit_log (tenant_id, action, details)\nVALUES ('{{$node['Validate Tenant Subscription'].json.tenant_id}}', 'service_deployed', '{\"service_key\": \"{{$node['Get Service Details'].json.service_key}}\"}'::jsonb);",
+        "options": {}
+      },
+      "name": "Log Deployment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1570, 300],
+      "credentials": {
+        "postgres": {
+          "name": "AIQSO Master DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"service_key\": \"{{$node['Get Service Details'].json.service_key}}\", \"message\": \"Service deployed successfully\"}",
+        "options": {}
+      },
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1790, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"success\": false, \"error\": \"No active subscription found\"}",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [690, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Validate Tenant Subscription", "type": "main", "index": 0}]]
+    },
+    "Validate Tenant Subscription": {
+      "main": [[{"node": "Has Active Subscription?", "type": "main", "index": 0}]]
+    },
+    "Has Active Subscription?": {
+      "main": [
+        [{"node": "Get Service Details", "type": "main", "index": 0}],
+        [{"node": "Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Get Service Details": {
+      "main": [[{"node": "Deploy Service Container", "type": "main", "index": 0}]]
+    },
+    "Deploy Service Container": {
+      "main": [[{"node": "Update Service Status", "type": "main", "index": 0}]]
+    },
+    "Update Service Status": {
+      "main": [[{"node": "Log Deployment", "type": "main", "index": 0}]]
+    },
+    "Log Deployment": {
+      "main": [[{"node": "Success Response", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2025-09-29T00:00:00.000Z",
+  "versionId": "1"
+}
