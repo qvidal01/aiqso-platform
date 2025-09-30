@@ -1,0 +1,148 @@
+{
+  "name": "05 - AI Content Generation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-generate",
+        "responseMode": "responseNode"
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "aiqso-ai-generate"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.id, t.subdomain, s.status FROM tenants t JOIN subscriptions s ON s.tenant_id = t.id JOIN tenant_services ts ON ts.tenant_id = t.id JOIN services sv ON ts.service_id = sv.id WHERE t.id = '{{$json[\"body\"][\"tenant_id\"]}}' AND s.status = 'active' AND sv.service_key IN ('content', 'social') LIMIT 1;"
+      },
+      "name": "Validate AI Access",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [470, 300],
+      "credentials": {
+        "postgres": {
+          "name": "AIQSO Master DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json[\"id\"] ? true : false}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Has AI Features?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://10.10.10.11:11434/api/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "llama3:latest"
+            },
+            {
+              "name": "prompt",
+              "value": "={{$json[\"body\"][\"prompt\"] || 'Write content about ' + $json[\"body\"][\"topic\"]}}"
+            },
+            {
+              "name": "stream",
+              "value": false
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "name": "Generate with Ollama",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO usage_metrics (tenant_id, service_id, metric_type, metric_value) SELECT '{{$node[\"Validate AI Access\"].json[\"id\"]}}', id, 'ai_requests', 1 FROM services WHERE service_key = 'content';"
+      },
+      "name": "Log AI Usage",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (tenant_id, action, details) VALUES ('{{$node[\"Validate AI Access\"].json[\"id\"]}}', 'ai_content_generated', '{\"service\": \"ai_generation\"}');"
+      },
+      "name": "Log Audit Entry",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}"
+      },
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"success\": false, \"error\": \"AI features not available\"}",
+        "options": {
+          "responseCode": 403
+        }
+      },
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [690, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{"node": "Validate AI Access", "type": "main", "index": 0}]]
+    },
+    "Validate AI Access": {
+      "main": [[{"node": "Has AI Features?", "type": "main", "index": 0}]]
+    },
+    "Has AI Features?": {
+      "main": [
+        [{"node": "Generate with Ollama", "type": "main", "index": 0}],
+        [{"node": "Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Generate with Ollama": {
+      "main": [[{"node": "Log AI Usage", "type": "main", "index": 0}]]
+    },
+    "Log AI Usage": {
+      "main": [[{"node": "Log Audit Entry", "type": "main", "index": 0}]]
+    },
+    "Log Audit Entry": {
+      "main": [[{"node": "Success Response", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1
+}

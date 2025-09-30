@@ -1,0 +1,39 @@
+N8N POSTGRESQL CONNECTION TROUBLESHOOTING
+==========================================
+
+✅ Connection tested successfully from n8n container (LXC 101)
+✅ Database has 6 services loaded
+✅ All network connectivity working
+
+CONNECTION DETAILS FOR N8N:
+---------------------------
+Host: 10.10.10.150
+Port: 5432
+Database: aiqso_master
+User: aiqso_admin
+Password: AiqsoSecure2025!Platform
+
+SSL Mode: disable
+
+IMPORTANT NOTES:
+----------------
+1. The password contains special characters: ! 
+   - Make sure you're typing it exactly: AiqsoSecure2025!Platform
+   - Copy/paste may help avoid typos
+
+2. Try these settings in n8n:
+   - Connection Type: Host and Port
+   - SSL: Disable (or "Allow")
+   - Do NOT check "Ignore SSL Issues"
+
+3. Alternative: Try connection string format in n8n:
+   postgresql://aiqso_admin:AiqsoSecure2025!Platform@10.10.10.150:5432/aiqso_master?sslmode=disable
+
+VERIFICATION QUERY TO TEST:
+---------------------------
+SELECT service_key, service_name FROM services LIMIT 3;
+
+Expected Result:
+crm         | CRM Suite
+docs        | Document Management
+social      | Social Media Manager
