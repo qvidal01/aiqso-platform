@@ -14,8 +14,13 @@ if [ -z "$TENANT_ID" ] || [ -z "$SERVICE_KEY" ]; then
     exit 1
 fi
 
-# Source environment
-source /root/.aiqso.env
+# Export environment variables
+export POSTGRES_HOST=10.10.10.150
+export POSTGRES_PORT=5432
+export POSTGRES_DB=aiqso_master
+export POSTGRES_USER=aiqso_admin
+export POSTGRES_PASSWORD=AiqsoSecure2025Platform
+export PGPASSWORD=AiqsoSecure2025Platform
 
 # Change to scripts directory
 cd /root/aiqso-platform/scripts
