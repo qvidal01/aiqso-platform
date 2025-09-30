@@ -5,7 +5,7 @@ Multi-tenant SaaS platform providing modular services (CRM, Document Management,
 ## Overview
 
 - **Domain**: aiqso.io
-- **Owner**: QMVidal@gmail.com
+- **Owner**: quinn@aiqso.io
 - **GitHub**: qvidal01/aiqso-platform
 - **Infrastructure**: Proxmox-based with existing containers and VMs
 

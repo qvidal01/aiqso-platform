@@ -373,4 +373,4 @@ vzdump --all --mode snapshot --compress gzip --storage syno-nfs --mailto admin@e
 
 For issues or questions:
 - GitHub Issues: https://github.com/qvidal01/aiqso-platform/issues
-- Email: QMVidal@gmail.com
+- Email: quinn@aiqso.io
