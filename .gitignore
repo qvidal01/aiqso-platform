@@ -39,3 +39,13 @@ credentials/
 tmp/
 temp/
 *.tmp
+
+# Images and media (do not commit)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.svg
+*.ico
+*.pdf
