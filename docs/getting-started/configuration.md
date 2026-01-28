@@ -1,0 +1,58 @@
+# Configuration
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and configure:
+
+```bash
+cp .env.example .env
+```
+
+### Available Variables
+
+```bash
+# Master Database (LXC 150)
+POSTGRES_HOST=10.10.10.150
+POSTGRES_PORT=5432
+POSTGRES_DB=aiqso_master
+POSTGRES_USER=aiqso_admin
+POSTGRES_PASSWORD=<generate-strong-password>
+
+# Redis (Container 107)
+REDIS_HOST=10.10.10.111
+REDIS_PORT=6379
+
+# Stripe
+STRIPE_SECRET_KEY=sk_live_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PUBLISHABLE_KEY=pk_live_...
+
+# Domain
+BASE_DOMAIN=aiqso.io
+
+# n8n (Container 101)
+N8N_HOST=10.10.10.120
+N8N_WEBHOOK_URL=https://n8n.aiqso.io
+
+# Ollama (Container 119)
+OLLAMA_HOST=10.10.10.11
+OLLAMA_PORT=11434
+OLLAMA_MODEL=llama3:latest
+
+# Logging
+VECTOR_HOST=10.10.10.100
+ELASTICSEARCH_HOST=10.200.200.123
+WAZUH_HOST=10.200.200.178
+SYNOLOGY_HOST=192.168.0.25
+
+# Email
+ADMIN_EMAIL=QMVidal@gmail.com
+
+# GitHub
+GITHUB_USERNAME=qvidal01
+GITHUB_REPO=aiqso-platform
+
+# Proxmox
+PROXMOX_HOST=proxhpmain
+PROXMOX_USER=root@pam
+PROXMOX_PASSWORD=<your-proxmox-password>```
